@@ -7,7 +7,7 @@ random.seed(0)
 
 def set_weights(m, n):
 
-    w = np.random.uniform(-1, 1, (n, m))
+    w = np.random.uniform(-0.5, 0.5, (n, m))
     return w
 
 
@@ -21,40 +21,54 @@ def act_fun(x, mode=0):
     if mode == 0:
         return np.tanh(x)
     if mode == 1:
-        return 1/(1+np.exp(-x))
+        indices_pos = np.nonzero(x >= 0)
+        indices_neg = np.nonzero(x < 0)
+
+        y = np.zeros_like(x)
+        y[indices_pos] = 1 / (1 + np.exp(-x[indices_pos]))
+        y[indices_neg] = np.exp(x[indices_neg]) / (1 + np.exp(x[indices_neg]))
+        return y
 
 
 def der_act_fun(x, mode=0):
 
     if mode == 0:
         return 1 - x*x
-    else :
+    else:
         return x*(1-x)
 
 
 def softmax(a):
-    # a = a - np.max(a)
+    a = a-a.max()
     exp_a = np.exp(a)
     sum_exp_a = np.sum(exp_a)
     y = exp_a / sum_exp_a
     return y
 
 
+def reciprocal(x):
+    t = np.zeros([len(x), 1])
+    for i in range(len(x)):
+        t[i][0] = 1/x[i][0]
+    return t
+
+
 class BPnet:
     def __init__(self):
         self.input_n = 0
-        self.input_cells = []
+        self.input_units = []
         self.input_ws = []
         self.hidden_layers = []
         self.hidden_outputs = []
         self.hidden_bias = []
         self.hidden_ws = []
         self.output_n = 0
-        self.output_cells = []
+        self.output_units = []
         self.output_ws = []
         self.output_bias = []
         self.r = 1
         self.mode = 0
+        self.soft_outputs = []
 
     def set_net(self, input_n, output_n, hidden_layers, r, mode):
         self.input_n = input_n
@@ -79,11 +93,11 @@ class BPnet:
 
     def forward(self, input):
 
-        self.input_cells = input
+        self.input_units = input
         '''
         输入到隐藏层
         '''
-        sum = np.dot(self.input_ws, self.input_cells)
+        sum = np.dot(self.input_ws, self.input_units)
 
         self.hidden_outputs[0] = act_fun(sum+self.hidden_bias[0], self.mode)
         '''
@@ -96,45 +110,30 @@ class BPnet:
 
         '''
         隐藏层到输出层
-        for i in range(self.output_n):
-            sum = 0.0
-            for j in range(self.hidden_layers[len(self.hidden_layers)-1]):
-                sum += self.output_ws[j][i]*self.hidden_outputs[len(self.hidden_layers)-1][j]
-            self.output_cells[i] = act_fun(self.output_bias[i]+sum, self.mode)
-            if self.mode == 1:
-                self.output_cells = softmax(self.output_cells)
-        return self.output_cells[:]
+    
         '''
         sum = np.dot(self.output_ws, self.hidden_outputs[len(self.hidden_layers)-1])
         if self.mode == 0:
-            self.output_cells = act_fun(self.output_bias+sum, self.mode)
+            self.output_units = act_fun(self.output_bias+sum, self.mode)
         elif self.mode == 1:
-            self.output_cells = softmax(self.output_bias+sum)
-
-        return np.array(self.output_cells)
+            self.output_units = softmax(self.output_bias+sum)
+        # self.output_units = act_fun(self.output_bias+sum, self.mode)
+        # if self.mode == 1:
+        #     self.soft_outputs = softmax(self.output_units)
+        # if self.mode == 0:
+        #     return np.array(self.output_units)
+        # return np.array(self.soft_outputs)
+        return np.array(self.output_units)
 
     def back_adjust(self, target):
-        # error = [0.0]*self.output_n
-        # output_delta_ws = [0.0]*self.output_n
-        # for i in range(len(target)):
-        #     error[i] = target[i]-self.output_cells[i]
-        #     output_delta_ws[i] = error[i]*der_act_fun(self.output_cells[i],self.mode)
+
         # 计算输出层delta weights
-        error = target - self.output_cells
-        output_delta_ws = error * der_act_fun(self.output_cells, self.mode)
-        # pre_delta_ws = output_delta_ws
-        # pre_ws = self.output_ws
-        # hidden_delta_ws = [0.0]*(len(self.hidden_layers))
-        # for i in range(len(self.hidden_layers)-1, -1, -1):
-        #     hidden_delta_ws[i] = [0.0]*(self.hidden_layers[i])
-        #     for j in range(self.hidden_layers[i]):
-        #         for k in range(len(pre_delta_ws)):
-        #             hidden_delta_ws[i][j] += pre_delta_ws[k]*pre_ws[j][k]
-        #         hidden_delta_ws[i][j] *= der_act_fun(self.hidden_outputs[i][j],self.mode)
-        #     if i > 0:
-        #         pre_delta_ws = hidden_delta_ws[i]
-        #         pre_ws = self.hidden_ws[i-1]
-        # 计算隐藏层delta weights
+        if self.mode == 0:
+            output_delta_ws = (target - self.output_units) * der_act_fun(self.output_units, self.mode)
+        else:
+            output_delta_ws = target - self.output_units
+            #output_delta_ws = (target - self.soft_outputs) * der_act_fun(self.output_units, self.mode)
+
         pre_delta_ws = output_delta_ws
         pre_ws = self.output_ws
         hidden_delta_ws = [0.0]*(len(self.hidden_layers))
@@ -145,42 +144,27 @@ class BPnet:
                 pre_delta_ws = hidden_delta_ws[i]
                 pre_ws = self.hidden_ws[i-1]
 
-        # for i in range(self.input_n):
-        #     for j in range(len(self.input_ws[i])):
-        #         self.input_ws[i][j] += self.r*hidden_delta_ws[0][j]*self.input_cells[i]
-        # 更新输入层weights
-        self.input_ws += self.r*np.dot(hidden_delta_ws[0], np.transpose(self.input_cells))
 
-        # for i in range(len(self.hidden_layers)-1):
-        #     for j in range(self.hidden_layers[i]):
-        #         for k in range(self.hidden_layers[i+1]):
-        #             self.hidden_ws[i][j][k] += self.r*hidden_delta_ws[i+1][k]*self.hidden_outputs[i][j]
+        # 更新输入层weights
+        self.input_ws += self.r*np.dot(hidden_delta_ws[0], np.transpose(self.input_units))
+
+
         # 更新隐藏层weights
+
         for i in range(len(self.hidden_layers)-1):
             self.hidden_ws[i] += self.r*np.dot(hidden_delta_ws[i+1], np.transpose(self.hidden_outputs[i]))
         # 更新输出层weights
-        # for i in range(len(self.output_ws)):
-        #     for j in range(len(self.output_ws[i])):
-        #         self.output_ws[i][j] += self.r*output_delta_ws[j]*self.hidden_outputs[len(self.hidden_layers)-1][i]
+
         self.output_ws += self.r*np.dot(output_delta_ws, np.transpose(self.hidden_outputs[len(self.hidden_layers)-1]))
 
-        # for i in range(len(self.output_bias)):
-        #     self.output_bias[i] += self.r*output_delta_ws[i]
+
         # 更新输出层bias
         self.output_bias += self.r*output_delta_ws
 
-        # for i in range(len(self.hidden_layers)):
-        #     for j in range(self.hidden_layers[i]):
-        #         self.hidden_bias[i][j] += self.r*hidden_delta_ws[i][j]
+
         # 更新隐藏层bias
         for i in range(len(self.hidden_layers)):
             self.hidden_bias[i] += self.r*hidden_delta_ws[i]
-
-    def get_error(self, target):
-        error = 0.0
-        for i in range(len(target)):
-            error += 0.5*(target[i]-self.output_cells[i])**2
-        return error
 
     def avg_error(self, inputs, targets):
         error = 0.0
@@ -188,7 +172,7 @@ class BPnet:
         for i in range(len(inputs)):
             predicts.append(self.forward(np.array([inputs[i]]))[0][0])
             for j in range(len(targets[i])):
-                error += 0.5*(targets[i][j]-self.output_cells[j][0])**2
+                error += 0.5*(targets[i][j]-self.output_units[j][0])**2
         error /= len(inputs)
         return error, predicts
 
@@ -196,7 +180,7 @@ class BPnet:
         count = 0
         for i in range(len(inputs)):
             self.forward(inputs[i])
-            index = np.argmax(self.output_cells)
+            index = np.argmax(self.output_units)
             if targets[index]:
                 count += 1
         return count*1.0/len(inputs)
@@ -211,6 +195,8 @@ class BPnet:
         train_correct_rates = []
         test_correct_rates = []
         for i in range(times):
+            train_loss = 0
+            test_loss = 0
             count = 0
             a = np.arange(12)
             np.random.shuffle(a)
@@ -219,7 +205,8 @@ class BPnet:
                 np.random.shuffle(b)
                 for k in b:
                     self.forward(np.array([train_inputs[j][k]]).T)
-                    index = np.argmax(self.output_cells)
+                    train_loss += -np.sum(np.log(self.output_units)*np.array([train_targets[j][k]]).T)
+                    index = np.argmax(self.output_units)
                     if train_targets[j][k][index] > 0:
                         count += 1
                     self.back_adjust(np.array([train_targets[j][k]]).T)
@@ -228,16 +215,19 @@ class BPnet:
 
             count = 0
             for j in range(12):
-                for k in range(len(test_inputs[i])):
-                    self.forward(np.array([test_inputs[i][j]]).T)
-                    index = np.argmax(self.output_cells)
-                    if test_outputs[i][j][index] > 0:
+                for k in range(len(test_inputs[j])):
+                    self.forward(np.array([test_inputs[j][k]]).T)
+                    test_loss += -np.sum(np.log(self.output_units) * np.array([test_outputs[j][k]]).T)
+                    index = np.argmax(self.output_units)
+                    if test_outputs[j][k][index] > 0:
                         count += 1
-            rate2 = count * 1.0 / (12 * len(train_inputs[0]))
+            rate2 = count * 1.0 / (12 * len(test_inputs[0]))
             test_correct_rates.append(rate2)
             print('第', i+1, '次:')
             print('训练正确率:', rate1)
+            print('数据集平均loss:', train_loss/(len(train_inputs)*len(train_inputs[0])))
             print('测试正确率', rate2)
+            print('测试集平均loss:', test_loss/(len(test_inputs)*len(test_inputs[0])))
         return train_correct_rates, test_correct_rates
 
 
